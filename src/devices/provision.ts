@@ -18,6 +18,32 @@ export interface ProvisionedDevice {
   claimCode: string;
 }
 
+/** Prefixes are stored per device type; keep them to A-Z 0-9 and _ (used inside a regex). */
+const ID_PREFIX = /^[A-Z0-9]+(_[A-Z0-9]+)*$/;
+
+/** Next free `{prefix}_{00001}` for a type, counting devices and MQTT usernames. */
+export async function nextHardwareId(
+  dataSource: DataSource,
+  typeKey: string,
+): Promise<string> {
+  const type = await dataSource
+    .getRepository(DeviceType)
+    .findOneBy({ key: typeKey });
+  if (!type) {
+    throw new BadRequestException(`Unknown device type ${typeKey}`);
+  }
+  if (!type.idPrefix || !ID_PREFIX.test(type.idPrefix)) {
+    throw new BadRequestException(`${type.name} has no hardware ID prefix`);
+  }
+  const [{ last }] = (await dataSource.query(
+    `SELECT COALESCE(MAX(substring(id FROM $1)::bigint), 0)::text AS "last"
+       FROM (SELECT "hardwareId" AS id FROM "devices"
+             UNION ALL SELECT "username" FROM "mqtt_users") ids`,
+    [`^${type.idPrefix}_(\\d{1,15})$`],
+  )) as Array<{ last: string }>;
+  return `${type.idPrefix}_${String(BigInt(last) + 1n).padStart(5, '0')}`;
+}
+
 /** Creates an unclaimed device and its MQTT account. Only hashes of the two secrets are stored. */
 export async function provisionDevice(
   dataSource: DataSource,

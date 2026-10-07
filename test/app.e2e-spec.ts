@@ -425,6 +425,50 @@ describe('BongoMaker Control API v1 (e2e)', () => {
       });
     });
 
+    it('adopts changes made on the device (local: true) as the desired state', async () => {
+      const before = (
+        await http.get(`/api/v1/devices/${fanId}`).set(as('viewer'))
+      ).body;
+      await device(FAN.hardwareId, 'state/reported', {
+        state: { speed: 35, light: true },
+        local: true,
+      });
+      const fan = (await http.get(`/api/v1/devices/${fanId}`).set(as('viewer')))
+        .body;
+      expect(fan).toMatchObject({
+        desiredState: { speed: 35, light: true },
+        reportedState: { speed: 35, light: true },
+        stateVersion: before.stateVersion + 1,
+        syncing: false,
+      });
+      // Retained, so a reconnecting device doesn't get the old value back.
+      expect(published.at(-1)).toEqual({
+        hw: FAN.hardwareId,
+        channel: 'state/desired',
+        message: {
+          version: before.stateVersion + 1,
+          state: { speed: 35, light: true },
+        },
+        retain: true,
+      });
+
+      // Same state again: no new version. Without `local`, desired is untouched.
+      const count = published.length;
+      await device(FAN.hardwareId, 'state/reported', {
+        state: { speed: 35, light: true },
+        local: true,
+      });
+      await device(FAN.hardwareId, 'state/reported', { state: { speed: 20 } });
+      expect(published.length).toBe(count);
+      expect(
+        (await http.get(`/api/v1/devices/${fanId}`).set(as('viewer'))).body,
+      ).toMatchObject({
+        desiredState: { speed: 35 },
+        stateVersion: before.stateVersion + 1,
+        syncing: true,
+      });
+    });
+
     it('validates and acks commands per device type', async () => {
       await http
         .post(`/api/v1/devices/${fanId}/commands`)
@@ -741,6 +785,102 @@ describe('BongoMaker Control API v1 (e2e)', () => {
           })
           .expect(201)
       ).body.id;
+    });
+
+    it('deletes devices with their MQTT account (super_admin only)', async () => {
+      const made = (
+        await http
+          .post('/api/v1/admin/devices')
+          .set(as('developer'))
+          .send({ typeKey: 'fanled', hardwareId: 'BM_DEL_1' })
+          .expect(201)
+      ).body;
+      const claimed = (
+        await http
+          .post(`/api/v1/orgs/${orgId}/devices/claim`)
+          .set(as('owner'))
+          .send({
+            hardwareId: 'BM_DEL_1',
+            claimCode: made.claimCode,
+            name: 'To delete',
+          })
+          .expect(201)
+      ).body;
+
+      for (const role of ['owner', 'developer']) {
+        await http
+          .delete(`/api/v1/admin/devices/${made.id}`)
+          .set(as(role))
+          .expect(403);
+      }
+      await http
+        .delete('/api/v1/admin/devices/00000000-0000-4000-8000-000000000000')
+        .set(as('super_admin'))
+        .expect(404);
+      await http
+        .delete(`/api/v1/admin/devices/${made.id}`)
+        .set(as('super_admin'))
+        .expect(204);
+
+      await http
+        .get(`/api/v1/devices/${claimed.id}`)
+        .set(as('owner'))
+        .expect(404);
+      const accounts = await http
+        .get('/api/v1/admin/mqtt-users?search=BM_DEL_1')
+        .set(as('super_admin'))
+        .expect(200);
+      expect(accounts.body).toEqual([]);
+      expect(published.slice(-2)).toEqual([
+        {
+          hw: 'BM_DEL_1',
+          channel: 'state/desired',
+          message: null,
+          retain: true,
+        },
+        { hw: 'BM_DEL_1', channel: 'status', message: null, retain: true },
+      ]);
+      // The hardware ID is free again.
+      await http
+        .post('/api/v1/admin/devices')
+        .set(as('developer'))
+        .send({ typeKey: 'fanled', hardwareId: 'BM_DEL_1' })
+        .expect(201);
+    });
+
+    it('suggests the next hardware ID per type prefix', async () => {
+      const next = (typeKey: string) =>
+        http
+          .get(`/api/v1/admin/devices/next-id?typeKey=${typeKey}`)
+          .set(as('developer'));
+      await http
+        .get('/api/v1/admin/devices/next-id?typeKey=rgb_bar')
+        .set(as('owner'))
+        .expect(403);
+      await next('toaster').expect(400);
+      await next('').expect(400);
+
+      expect((await next('camera').expect(200)).body).toEqual({
+        hardwareId: 'BM_CAM_00001',
+      });
+      // Gaps and non-matching IDs (BM_MBL_X, BM_MBLX_9) are ignored; the highest number wins.
+      for (const hardwareId of ['BM_MBL_00001', 'BM_MBL_00041', 'BM_MBL_X']) {
+        await http
+          .post('/api/v1/admin/devices')
+          .set(as('developer'))
+          .send({ typeKey: 'rgb_bar', hardwareId })
+          .expect(201);
+      }
+      const { hardwareId } = (await next('rgb_bar').expect(200)).body;
+      expect(hardwareId).toBe('BM_MBL_00042');
+      await http
+        .post('/api/v1/admin/devices')
+        .set(as('developer'))
+        .send({ typeKey: 'rgb_bar', hardwareId })
+        .expect(201);
+      expect((await next('rgb_bar').expect(200)).body.hardwareId).toBe(
+        'BM_MBL_00043',
+      );
     });
 
     it('validates monitor bar light state, including colour temperature', async () => {

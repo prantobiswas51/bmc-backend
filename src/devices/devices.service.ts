@@ -167,6 +167,22 @@ export class DevicesService {
   }
 
   /**
+   * Platform admin: deletes the device for good. Its commands, telemetry and MQTT
+   * account go with it (ON DELETE CASCADE); retained broker messages are cleared so a
+   * re-provisioned ID starts clean.
+   */
+  async remove(id: string): Promise<void> {
+    const device = await this.devices.findOneBy({ id });
+    if (!device) {
+      throw new NotFoundException('Device not found');
+    }
+    await this.devices.delete({ id });
+    await this.mqtt.publish(device.hardwareId, 'state/desired', null, true);
+    await this.mqtt.publish(device.hardwareId, 'status', null, true);
+    this.realtime.emit(device.orgId, 'device.removed', { deviceId: id });
+  }
+
+  /**
    * Removes the device from the organization and wipes its shadow. Returns a fresh
    * claim code so it can be handed over and claimed again.
    */
@@ -265,27 +281,67 @@ export class DevicesService {
     return { id: row.id, orgId: row.orgId, typeKey: row.typeKey };
   }
 
+  /**
+   * `{"state": {...}}` from the device. With `"local": true` the change was made on the
+   * device itself (knob, switch, local web page): it also becomes the desired state, so
+   * the panel doesn't show it as pending and the retained desired state can't revert it.
+   */
   private async onReported(hardwareId: string, payload: Buffer) {
-    const state = parseJsonObject(payload)?.state;
+    const message = parseJsonObject(payload);
+    const state = message?.state;
     const seen = await this.touch(hardwareId);
     if (!seen || typeof state !== 'object' || state === null) {
       return;
     }
-    const device = await this.devices.findOneByOrFail({ id: seen.id });
-    const reportedState = mergePatch(
-      device.reportedState,
-      state,
-    ) as DeviceState;
+    const local = message?.local === true;
+    let desiredChanged = false;
+    let device: Device;
     try {
-      await this.types.validateState(device.typeKey, reportedState);
+      device = await this.dataSource.transaction(async (manager) => {
+        const current = await manager.findOneOrFail(Device, {
+          where: { id: seen.id },
+          lock: { mode: 'pessimistic_write' },
+        });
+        const reportedState = mergePatch(
+          current.reportedState,
+          state,
+        ) as DeviceState;
+        await this.types.validateState(current.typeKey, reportedState);
+        current.reportedState = reportedState;
+        if (local) {
+          const desiredState = mergePatch(
+            current.desiredState,
+            state,
+          ) as DeviceState;
+          if (!isDeepStrictEqual(desiredState, current.desiredState)) {
+            current.desiredState = desiredState;
+            current.stateVersion += 1;
+            desiredChanged = true;
+          }
+        }
+        return manager.save(current);
+      });
     } catch (error) {
       this.logger.warn(
         `Ignoring invalid state from ${hardwareId}: ${JSON.stringify((error as { response?: unknown }).response)}`,
       );
       return;
     }
-    device.reportedState = reportedState;
-    await this.devices.save(device);
+    if (desiredChanged) {
+      await this.mqtt.publish(
+        hardwareId,
+        'state/desired',
+        { version: device.stateVersion, state: device.desiredState },
+        true,
+      );
+      this.realtime.emit(device.orgId, 'device.desired', {
+        deviceId: device.id,
+        desiredState: device.desiredState,
+        stateVersion: device.stateVersion,
+        syncing: this.isSyncing(device),
+      });
+    }
+    const reportedState = device.reportedState;
     this.realtime.emit(device.orgId, 'device.reported', {
       deviceId: device.id,
       reportedState,

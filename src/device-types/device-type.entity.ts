@@ -21,6 +21,10 @@ export class DeviceType {
   @Column({ type: 'jsonb', default: {} })
   commands: Record<string, JsonSchema>;
 
+  /** Hardware ID prefix for provisioning, e.g. BM_MBL → BM_MBL_00001. */
+  @Column({ type: 'varchar', nullable: true })
+  idPrefix: string | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 }

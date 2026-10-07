@@ -29,6 +29,13 @@ export class ProvisionDeviceDto {
   hardwareId: string;
 }
 
+export class NextHardwareIdQuery {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(64)
+  typeKey: string;
+}
+
 export class SearchQuery {
   @IsOptional()
   @IsString()

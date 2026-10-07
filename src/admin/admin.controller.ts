@@ -22,6 +22,7 @@ import { MqttUsersService, MqttUserView } from '../mqtt/mqtt-users.service.js';
 import type { User } from '../users/user.entity.js';
 import {
   AdminDevicesQuery,
+  NextHardwareIdQuery,
   ProvisionDeviceDto,
   SearchQuery,
   SetPlatformRoleDto,
@@ -71,11 +72,28 @@ export class AdminController {
     return this.admin.listDevices(query);
   }
 
+  /** Suggested next hardware ID for a type ({prefix}_00001, …). Not reserved: provisioning checks again. */
+  @Get('devices/next-id')
+  @Platform('super_admin', 'developer')
+  async nextHardwareId(
+    @Query() query: NextHardwareIdQuery,
+  ): Promise<{ hardwareId: string }> {
+    return { hardwareId: await this.admin.nextHardwareId(query.typeKey) };
+  }
+
   /** Factory provisioning. The response holds the device secret and claim code; they are not shown again. */
   @Post('devices')
   @Platform('super_admin', 'developer')
   provision(@Body() dto: ProvisionDeviceDto): Promise<ProvisionedDevice> {
     return this.admin.provision(dto.typeKey, dto.hardwareId);
+  }
+
+  /** Deletes a device with its commands, telemetry and MQTT account. Claimed devices too. */
+  @Delete('devices/:id')
+  @HttpCode(204)
+  @Platform('super_admin')
+  deleteDevice(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
+    return this.admin.deleteDevice(id);
   }
 
   // --- MQTT -------------------------------------------------------------------

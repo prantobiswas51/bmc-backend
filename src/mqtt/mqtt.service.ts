@@ -23,7 +23,8 @@ export const INBOUND_CHANNELS = [
   'status',
 ] as const;
 export type InboundChannel = (typeof INBOUND_CHANNELS)[number];
-type OutboundChannel = 'state/desired' | 'cmd';
+// 'status' only to clear a deleted device's retained status.
+type OutboundChannel = 'state/desired' | 'cmd' | 'status';
 type Handler = (hardwareId: string, payload: Buffer) => Promise<unknown>;
 
 @Injectable()

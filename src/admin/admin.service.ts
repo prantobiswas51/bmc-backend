@@ -7,7 +7,11 @@ import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, ILike, IsNull, Not, Repository } from 'typeorm';
 import { Device } from '../devices/device.entity.js';
 import { DevicesService, DeviceView } from '../devices/devices.service.js';
-import { provisionDevice, ProvisionedDevice } from '../devices/provision.js';
+import {
+  nextHardwareId,
+  provisionDevice,
+  ProvisionedDevice,
+} from '../devices/provision.js';
 import { Organization } from '../orgs/org.entities.js';
 import { type PlatformRole, User } from '../users/user.entity.js';
 import { AdminDevicesQuery } from './admin.dto.js';
@@ -99,6 +103,14 @@ export class AdminService {
       ...this.devicesService.view(device),
       orgName: device.org?.name ?? null,
     }));
+  }
+
+  deleteDevice(id: string): Promise<void> {
+    return this.devicesService.remove(id);
+  }
+
+  nextHardwareId(typeKey: string): Promise<string> {
+    return nextHardwareId(this.dataSource, typeKey);
   }
 
   provision(typeKey: string, hardwareId: string): Promise<ProvisionedDevice> {
