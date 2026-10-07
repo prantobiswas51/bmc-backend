@@ -1,0 +1,73 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: bmc-backend-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_DIR: /home/canvas/apps/bmc-backend
+  SERVICE: bmc-backend
+
+jobs:
+  ci-cd:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - run: npm test
+
+      # ---- Deploy: only on push to main, after everything above passed ----
+      - name: Set up SSH
+        if: github.event_name == 'push'
+        env:
+          SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Upload build
+        if: github.event_name == 'push'
+        env:
+          HOST: ${{ secrets.VPS_HOST }}
+          USER: ${{ secrets.VPS_USER }}
+          PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          SSH="ssh -i ~/.ssh/id_deploy -p $PORT"
+          rsync -az --delete -e "$SSH" dist/ "$USER@$HOST:$APP_DIR/dist/"
+          rsync -az -e "$SSH" package.json package-lock.json "$USER@$HOST:$APP_DIR/"
+
+      - name: Install production deps and restart
+        if: github.event_name == 'push'
+        env:
+          HOST: ${{ secrets.VPS_HOST }}
+          USER: ${{ secrets.VPS_USER }}
+          PORT: ${{ secrets.VPS_PORT || '22' }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -p "$PORT" "$USER@$HOST" bash -s <<EOF
+          set -euo pipefail
+          cd "$APP_DIR"
+          npm ci --omit=dev
+          sudo systemctl restart "$SERVICE"
+          sleep 8
+          systemctl is-active --quiet "$SERVICE" || { journalctl -u "$SERVICE" -n 40 --no-pager; exit 1; }
+          code=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/api/v1 || true)
+          echo "API answered HTTP \$code"
+          [ "\$code" != "000" ] || { journalctl -u "$SERVICE" -n 40 --no-pager; exit 1; }
+          EOF

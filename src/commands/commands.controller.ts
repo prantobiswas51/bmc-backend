@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -43,18 +44,26 @@ export class CommandsController {
     return this.commands.list(deviceId, userId);
   }
 
-  /** Commands per day for the last `days` (1-90, default 7) — dashboard chart. */
+  /**
+   * Commands per day — dashboard chart. Either a calendar `month` (`YYYY-MM`)
+   * or the last `days` (1-90, default 7).
+   */
   @Get('orgs/:orgId/activity')
   activity(
     @UserId() userId: string,
     @Param('orgId', ParseUUIDPipe) orgId: string,
     @Query('days', new ParseIntPipe({ optional: true })) days = 7,
+    @Query('month') month?: string,
   ) {
-    return this.commands.activity(
-      orgId,
-      userId,
-      Math.min(Math.max(days, 1), 90),
-    );
+    if (month !== undefined) {
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) {
+        throw new BadRequestException('month must be YYYY-MM');
+      }
+      return this.commands.activity(orgId, userId, { month });
+    }
+    return this.commands.activity(orgId, userId, {
+      days: Math.min(Math.max(days, 1), 90),
+    });
   }
 
   @Get('commands/:id')

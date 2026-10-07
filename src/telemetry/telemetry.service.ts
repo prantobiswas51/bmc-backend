@@ -20,6 +20,7 @@ export interface TelemetryPoint {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_RANGE_MS = 31 * DAY_MS;
+const RETENTION_MONTHS = 12;
 
 @Injectable()
 export class TelemetryService implements OnModuleInit, OnModuleDestroy {
@@ -35,15 +36,20 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
     mqtt.on('telemetry', (hw, payload) => this.onTelemetry(hw, payload));
   }
 
-  /** Keep this and next month's partitions in place (checked daily). */
+  /** Keep this and next month's partitions in place, detach expired ones (checked daily). */
   async onModuleInit(): Promise<void> {
-    await this.ensurePartitions();
-    this.timer = setInterval(() => void this.ensurePartitions(), DAY_MS);
+    await this.maintainPartitions();
+    this.timer = setInterval(() => void this.maintainPartitions(), DAY_MS);
     this.timer.unref();
   }
 
   onModuleDestroy(): void {
     clearInterval(this.timer);
+  }
+
+  private async maintainPartitions(): Promise<void> {
+    await this.ensurePartitions();
+    await this.detachExpiredPartitions();
   }
 
   async ensurePartitions(now = new Date()): Promise<void> {
@@ -65,6 +71,44 @@ export class TelemetryService implements OnModuleInit, OnModuleDestroy {
           `Could not create ${name}: ${(error as Error).message}`,
         );
       }
+    }
+  }
+
+  /**
+   * Detach and drop monthly partitions that lie entirely beyond the retention
+   * window. Dropping is permanent: the telemetry rows in them are deleted.
+   */
+  async detachExpiredPartitions(now = new Date()): Promise<void> {
+    const cutoff = Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth() - RETENTION_MONTHS,
+      1,
+    );
+    try {
+      const rows = (await this.dataSource.query(
+        `SELECT c.relname AS "name"
+           FROM pg_inherits i
+           JOIN pg_class c ON c.oid = i.inhrelid
+          WHERE i.inhparent = 'telemetry'::regclass`,
+      )) as Array<{ name: string }>;
+      for (const { name } of rows) {
+        const match = /^telemetry_y(\d{4})m(\d{2})$/.exec(name);
+        if (!match) {
+          continue; // telemetry_default and anything unrecognised
+        }
+        if (Date.UTC(Number(match[1]), Number(match[2]) - 1, 1) >= cutoff) {
+          continue;
+        }
+        await this.dataSource.query(
+          `ALTER TABLE "telemetry" DETACH PARTITION "${name}"`,
+        );
+        await this.dataSource.query(`DROP TABLE "${name}"`);
+        this.logger.log(`Detached and dropped expired partition ${name}`);
+      }
+    } catch (error) {
+      this.logger.error(
+        `Could not detach expired partitions: ${(error as Error).message}`,
+      );
     }
   }
 

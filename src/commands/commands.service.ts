@@ -72,24 +72,36 @@ export class CommandsService {
     return this.commands.findOneByOrFail({ id });
   }
 
-  /** Commands sent per day in an organization, oldest first, zero-filled. */
+  /**
+   * Commands sent per day in an organization, oldest first, zero-filled.
+   * Either the last `days` days, or a whole calendar `month` (`YYYY-MM`,
+   * capped at today).
+   */
   async activity(
     orgId: string,
     userId: string,
-    days: number,
+    range: { days: number } | { month: string },
   ): Promise<Array<{ day: string; commands: number; failed: number }>> {
     await this.orgs.requireRole(orgId, userId, 'viewer');
+    const [start, end, param] =
+      'month' in range
+        ? [
+            `date_trunc('month', $2::date)::date`,
+            `least((date_trunc('month', $2::date) + interval '1 month - 1 day')::date, current_date)`,
+            `${range.month}-01`,
+          ]
+        : [`current_date - ($2::int - 1)`, `current_date`, range.days];
     return this.commands.query(
       `SELECT to_char(d.day, 'YYYY-MM-DD') AS "day",
               count(c."id")::int AS "commands",
               count(c."id") FILTER (WHERE c."status" IN ('failed', 'expired'))::int AS "failed"
-         FROM generate_series(current_date - ($2::int - 1), current_date, interval '1 day') AS d(day)
+         FROM generate_series(${start}, ${end}, interval '1 day') AS d(day)
          LEFT JOIN "commands" c
            ON c."createdAt" >= d.day AND c."createdAt" < d.day + interval '1 day'
           AND c."deviceId" IN (SELECT "id" FROM "devices" WHERE "orgId" = $1)
         GROUP BY d.day
         ORDER BY d.day`,
-      [orgId, days],
+      [orgId, param],
     );
   }
 

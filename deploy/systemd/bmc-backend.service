@@ -1,0 +1,19 @@
+# Copy to /etc/systemd/system/bmc-backend.service, then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now bmc-backend
+# Needs /home/canvas/apps/bmc-backend/.env (see .env.example). Migrations run on boot.
+[Unit]
+Description=BongoMaker Control API (bmc-backend)
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=canvas
+WorkingDirectory=/home/canvas/apps/bmc-backend
+Environment=NODE_ENV=production
+# systemd has no shell PATH: if node comes from nvm, replace with its absolute path.
+ExecStart=/usr/bin/env node dist/main
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
