@@ -11,12 +11,13 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  APP_DIR: /home/canvas/apps/bmc-backend
   SERVICE: bmc-backend
 
 jobs:
   ci-cd:
     runs-on: ubuntu-latest
+    env:
+      APP_DIR: ${{ secrets.BACKEND_DIR }}
     steps:
       - uses: actions/checkout@v4
 
