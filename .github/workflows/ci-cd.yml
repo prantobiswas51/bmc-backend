@@ -51,7 +51,7 @@ jobs:
         run: |
           SSH="ssh -i ~/.ssh/id_deploy -p $PORT"
           rsync -az --delete -e "$SSH" dist/ "$USER@$HOST:$APP_DIR/dist/"
-          rsync -az -e "$SSH" package.json package-lock.json "$USER@$HOST:$APP_DIR/"
+          rsync -az -e "$SSH" package.json package-lock.json ecosystem.config.cjs "$USER@$HOST:$APP_DIR/"
 
       - name: Install production deps and restart
         if: github.event_name == 'push'
@@ -60,14 +60,15 @@ jobs:
           USER: ${{ secrets.VPS_USER }}
           PORT: ${{ secrets.VPS_PORT || '22' }}
         run: |
-          ssh -i ~/.ssh/id_deploy -p "$PORT" "$USER@$HOST" bash -s <<EOF
+          ssh -i ~/.ssh/id_deploy -p "$PORT" "$USER@$HOST" bash -ls <<EOF
           set -euo pipefail
           cd "$APP_DIR"
           npm ci --omit=dev
-          sudo systemctl restart "$SERVICE"
+          pm2 startOrReload ecosystem.config.cjs --update-env
+          pm2 save
           sleep 8
-          systemctl is-active --quiet "$SERVICE" || { journalctl -u "$SERVICE" -n 40 --no-pager; exit 1; }
+          pm2 describe "$SERVICE" | grep -q 'status.*online' || { pm2 logs "$SERVICE" --nostream --lines 40; exit 1; }
           code=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/api/v1 || true)
           echo "API answered HTTP \$code"
-          [ "\$code" != "000" ] || { journalctl -u "$SERVICE" -n 40 --no-pager; exit 1; }
+          [ "\$code" != "000" ] || { pm2 logs "$SERVICE" --nostream --lines 40; exit 1; }
           EOF
