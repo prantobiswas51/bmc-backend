@@ -1,4 +1,4 @@
-import { aclAllows } from './mqtt-auth.service.js';
+import { aclAllows, DEVICE_ACL } from './mqtt-auth.service.js';
 import { emqxAdapter } from './brokers/emqx.adapter.js';
 import { mosquittoAdapter } from './brokers/mosquitto.adapter.js';
 import { topicMatches } from './topic-match.js';
@@ -47,6 +47,25 @@ describe('aclAllows', () => {
     expect(aclAllows(rules, req('clients/#', 'subscribe', '#'))).toBe(false);
     expect(aclAllows(rules, req('clients/a/b/x', 'write', 'a/b'))).toBe(false);
     expect(aclAllows(rules, req('logs/+', 'write', 'bob', '+'))).toBe(false);
+  });
+});
+
+describe('DEVICE_ACL', () => {
+  const device = (topic: string, access: 'read' | 'write' | 'subscribe') => ({
+    username: 'BM_MBL_00001',
+    clientId: 'BM_MBL_00001',
+    topic,
+    access,
+  });
+
+  it('lets a device read its own claim message but never write it', () => {
+    expect(aclAllows(DEVICE_ACL, device('devices/BM_MBL_00001/claim', 'subscribe'))).toBe(true);
+    expect(aclAllows(DEVICE_ACL, device('devices/BM_MBL_00001/claim', 'write'))).toBe(false);
+  });
+
+  it("does not let a device read another device's claim message", () => {
+    expect(aclAllows(DEVICE_ACL, device('devices/BM_MBL_00002/claim', 'subscribe'))).toBe(false);
+    expect(aclAllows(DEVICE_ACL, device('devices/+/claim', 'subscribe'))).toBe(false);
   });
 });
 

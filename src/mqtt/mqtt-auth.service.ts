@@ -16,6 +16,7 @@ import { topicMatches } from './topic-match.js';
 export const DEVICE_ACL: AclRule[] = [
   { topic: `${mqttConfig.topicPrefix}/%u/state/desired`, access: 'read' },
   { topic: `${mqttConfig.topicPrefix}/%u/cmd`, access: 'read' },
+  { topic: `${mqttConfig.topicPrefix}/%u/claim`, access: 'read' },
   { topic: `${mqttConfig.topicPrefix}/%u/state/reported`, access: 'write' },
   { topic: `${mqttConfig.topicPrefix}/%u/cmd/ack`, access: 'write' },
   { topic: `${mqttConfig.topicPrefix}/%u/telemetry`, access: 'write' },

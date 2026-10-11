@@ -319,6 +319,14 @@ describe('BongoMaker Control API v1 (e2e)', () => {
       });
       expect(res.body.secretHash).toBeUndefined();
 
+      // The device is told it was claimed (retained), carrying its local-API key.
+      expect(published).toContainEqual({
+        hw: FAN.hardwareId,
+        channel: 'claim',
+        message: { claimed: true, key: expect.any(String) },
+        retain: true,
+      });
+
       // Same code again (even by the same org) fails: it's single use.
       await http
         .post(`/api/v1/orgs/${orgId}/devices/claim`)
@@ -609,6 +617,39 @@ describe('BongoMaker Control API v1 (e2e)', () => {
       }
     });
 
+    it('gives members the local-API key, the same one the device was sent', async () => {
+      const claimMessage = published.find(
+        (m) => m.hw === FAN.hardwareId && m.channel === 'claim',
+      )?.message as { key: string };
+      for (const user of ['owner', 'member']) {
+        const res = await http
+          .get(`/api/v1/devices/${fanId}/local-key`)
+          .set(as(user))
+          .expect(200);
+        expect(res.body.key).toBe(claimMessage.key);
+      }
+      await http
+        .get(`/api/v1/devices/${fanId}/local-key`)
+        .set(as('viewer'))
+        .expect(403);
+      await http
+        .get(`/api/v1/devices/${fanId}/local-key`)
+        .set(as('outsider'))
+        .expect(404);
+    });
+
+    it('re-sends the claim when a claimed device connects', async () => {
+      const before = published.filter(
+        (m) => m.hw === FAN.hardwareId && m.channel === 'claim',
+      ).length;
+      await device(FAN.hardwareId, 'status', { online: true });
+      const after = published.filter(
+        (m) => m.hw === FAN.hardwareId && m.channel === 'claim',
+      );
+      expect(after).toHaveLength(before + 1);
+      expect(after.at(-1)).toMatchObject({ retain: true });
+    });
+
     it('releases a device with a fresh claim code', async () => {
       await http
         .delete(`/api/v1/devices/${camId}`)
@@ -619,6 +660,13 @@ describe('BongoMaker Control API v1 (e2e)', () => {
         .set(as('owner'))
         .expect(200);
       expect(released.body.claimCode).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+      // Local control is switched off until it is claimed again.
+      expect(published).toContainEqual({
+        hw: CAM.hardwareId,
+        channel: 'claim',
+        message: null,
+        retain: true,
+      });
       await http.get(`/api/v1/devices/${camId}`).set(as('owner')).expect(404);
       await http
         .post(`/api/v1/orgs/${orgId}/devices/claim`)
@@ -831,7 +879,7 @@ describe('BongoMaker Control API v1 (e2e)', () => {
         .set(as('super_admin'))
         .expect(200);
       expect(accounts.body).toEqual([]);
-      expect(published.slice(-2)).toEqual([
+      expect(published.slice(-3)).toEqual([
         {
           hw: 'BM_DEL_1',
           channel: 'state/desired',
@@ -839,6 +887,7 @@ describe('BongoMaker Control API v1 (e2e)', () => {
           retain: true,
         },
         { hw: 'BM_DEL_1', channel: 'status', message: null, retain: true },
+        { hw: 'BM_DEL_1', channel: 'claim', message: null, retain: true },
       ]);
       // The hardware ID is free again.
       await http

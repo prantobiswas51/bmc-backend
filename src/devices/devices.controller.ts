@@ -56,6 +56,15 @@ export class DevicesController {
     return this.devices.get(id, userId);
   }
 
+  /** Member+: key for the device's local API (hotspot / LAN), cached by the app for offline control. */
+  @Get('devices/:id/local-key')
+  localKey(
+    @UserId() userId: string,
+    @Id() id: string,
+  ): Promise<{ key: string }> {
+    return this.devices.getLocalKey(id, userId);
+  }
+
   /** Owner: rename or move to another location. */
   @Patch('devices/:id')
   update(

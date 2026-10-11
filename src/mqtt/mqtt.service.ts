@@ -10,6 +10,9 @@ import { clientOptions, mqttConfig, safeBrokerUrl } from './mqtt.config.js';
 /**
  * Topic layout (prefix defaults to `devices`, {hw} = device hardwareId):
  *   backend → device   {hw}/state/desired  {"version": n, "state": {...}}   retained
+ *                      {hw}/claim          {"claimed": true, "key": "..."}      retained
+ *                                          (empty = released); until a device has it,
+ *                                          its local API refuses control
  *                      {hw}/cmd            {"id", "action", "payload"}
  *   device → backend   {hw}/state/reported {"state": {...}}
  *                      {hw}/cmd/ack        {"id", "ok": bool, "result"?, "error"?}
@@ -24,7 +27,7 @@ export const INBOUND_CHANNELS = [
 ] as const;
 export type InboundChannel = (typeof INBOUND_CHANNELS)[number];
 // 'status' only to clear a deleted device's retained status.
-type OutboundChannel = 'state/desired' | 'cmd' | 'status';
+type OutboundChannel = 'state/desired' | 'cmd' | 'status' | 'claim';
 type Handler = (hardwareId: string, payload: Buffer) => Promise<unknown>;
 
 @Injectable()

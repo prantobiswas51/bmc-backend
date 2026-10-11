@@ -22,6 +22,7 @@ import type { OrgRole } from '../orgs/org.entities.js';
 import { OrgsService } from '../orgs/orgs.service.js';
 import { RealtimeGateway } from '../realtime/realtime.gateway.js';
 import { Device, type DeviceState } from './device.entity.js';
+import { localKey } from './local-key.js';
 import {
   ClaimDeviceDto,
   ListDevicesQuery,
@@ -134,6 +135,7 @@ export class DevicesService {
     if (dto.locationId) {
       await this.orgs.assertLocationInOrg(dto.locationId, orgId);
     }
+    const claimedAt = new Date();
     const { affected } = await this.devices.update(
       { id: device.id, claimCodeHash: device.claimCodeHash! },
       {
@@ -141,13 +143,37 @@ export class DevicesService {
         locationId: dto.locationId ?? null,
         name: dto.name,
         claimCodeHash: null,
-        claimedAt: new Date(),
+        claimedAt,
       },
     );
     if (!affected) {
       throw new ConflictException('Device was just claimed');
     }
+    // Tell the device: until it has this, its local API refuses control.
+    await this.publishClaim(dto.hardwareId, claimedAt);
     return this.get(device.id, userId);
+  }
+
+  /**
+   * The key for the device's local API (hotspot / LAN), for members of the owning
+   * organization. The app caches it so it can control the device with no internet.
+   */
+  async getLocalKey(id: string, userId: string): Promise<{ key: string }> {
+    const device = await this.access(id, userId, 'member');
+    if (!device.claimedAt) {
+      throw new NotFoundException('Device not found');
+    }
+    return { key: localKey(device.hardwareId, device.claimedAt) };
+  }
+
+  /** Retained, so the device receives it whenever it connects. No `claimedAt` clears it. */
+  private async publishClaim(hardwareId: string, claimedAt: Date | null) {
+    await this.mqtt.publish(
+      hardwareId,
+      'claim',
+      claimedAt ? { claimed: true, key: localKey(hardwareId, claimedAt) } : null,
+      true,
+    );
   }
 
   async update(
@@ -179,6 +205,7 @@ export class DevicesService {
     await this.devices.delete({ id });
     await this.mqtt.publish(device.hardwareId, 'state/desired', null, true);
     await this.mqtt.publish(device.hardwareId, 'status', null, true);
+    await this.publishClaim(device.hardwareId, null);
     this.realtime.emit(device.orgId, 'device.removed', { deviceId: id });
   }
 
@@ -200,6 +227,7 @@ export class DevicesService {
       stateVersion: device.stateVersion + 1,
     });
     await this.mqtt.publish(device.hardwareId, 'state/desired', null, true);
+    await this.publishClaim(device.hardwareId, null); // local control off until re-claimed
     this.realtime.emit(device.orgId, 'device.removed', { deviceId: id });
     return { claimCode: code };
   }
@@ -366,6 +394,17 @@ export class DevicesService {
       await this.devices.update(seen.id, {
         firmwareVersion: status.firmware.slice(0, 64),
       });
+    }
+    // Re-send the claim whenever a claimed device connects, in case the broker lost the
+    // retained message (restart without persistence) or the device missed it.
+    if (seen?.orgId) {
+      const claimed = await this.devices.findOne({
+        where: { id: seen.id },
+        select: { id: true, hardwareId: true, claimedAt: true },
+      });
+      if (claimed?.claimedAt) {
+        await this.publishClaim(claimed.hardwareId, claimed.claimedAt);
+      }
     }
   }
 
