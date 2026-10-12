@@ -966,6 +966,44 @@ describe('BongoMaker Control API v1 (e2e)', () => {
         .expect(202);
     });
 
+    it('lets the monitor bar light set its two sides separately', async () => {
+      await http
+        .patch(`/api/v1/devices/${rgbId}/state`)
+        .set(as('member'))
+        .send({ state: { join: 'yes' } })
+        .expect(422);
+      await http
+        .patch(`/api/v1/devices/${rgbId}/state`)
+        .set(as('member'))
+        .send({ state: { rightColor: 'blue' } })
+        .expect(422);
+      await http
+        .patch(`/api/v1/devices/${rgbId}/state`)
+        .set(as('member'))
+        .send({ state: { rightBrightness: 101 } })
+        .expect(422);
+      const ok = await http
+        .patch(`/api/v1/devices/${rgbId}/state`)
+        .set(as('member'))
+        .send({
+          state: {
+            join: false,
+            color: '#ff0000',
+            brightness: 40,
+            rightColor: '#0000ff',
+            rightBrightness: 90,
+          },
+        })
+        .expect(202);
+      expect(ok.body.desiredState).toMatchObject({
+        join: false,
+        color: '#ff0000',
+        brightness: 40,
+        rightColor: '#0000ff',
+        rightBrightness: 90,
+      });
+    });
+
     it('reports command activity per day for the dashboard', async () => {
       const res = await http
         .get(`/api/v1/orgs/${orgId}/activity?days=7`)
