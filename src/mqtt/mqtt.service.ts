@@ -9,7 +9,7 @@ import { clientOptions, mqttConfig, safeBrokerUrl } from './mqtt.config.js';
 
 /**
  * Topic layout (prefix defaults to `devices`, {hw} = device hardwareId):
- *   backend → device   {hw}/state/desired  {"version": n, "state": {...}}   retained
+ *   backend → device   {hw}/state/desired  {"version": n, "at": epoch ms, "state": {...}}   retained
  *                      {hw}/claim          {"claimed": true, "key": "..."}      retained
  *                                          (empty = released); until a device has it,
  *                                          its local API refuses control

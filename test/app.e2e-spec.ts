@@ -387,7 +387,11 @@ describe('BongoMaker Control API v1 (e2e)', () => {
       expect(published.at(-1)).toEqual({
         hw: FAN.hardwareId,
         channel: 'state/desired',
-        message: { version: 1, state: { speed: 60, light: true } },
+        message: {
+          version: 1,
+          at: expect.any(Number),
+          state: { speed: 60, light: true },
+        },
         retain: true,
       });
 
@@ -455,6 +459,7 @@ describe('BongoMaker Control API v1 (e2e)', () => {
         channel: 'state/desired',
         message: {
           version: before.stateVersion + 1,
+          at: expect.any(Number),
           state: { speed: 35, light: true },
         },
         retain: true,
@@ -475,6 +480,61 @@ describe('BongoMaker Control API v1 (e2e)', () => {
         stateVersion: before.stateVersion + 1,
         syncing: true,
       });
+    });
+
+    it('adopts a local change only if it was made after the last command (whoever sent last wins)', async () => {
+      const read = async () =>
+        (await http.get(`/api/v1/devices/${fanId}`).set(as('viewer'))).body;
+      const before = await read();
+
+      // A user sends a command now.
+      await http
+        .patch(`/api/v1/devices/${fanId}/state`)
+        .set(as('member'))
+        .send({ state: { speed: 80 } })
+        .expect(202);
+      const sent = published.at(-1)!.message as { at: number; version: number };
+      expect(sent.at).toBeGreaterThan(1.7e12);
+
+      // The device reports a local change it made BEFORE that command (e.g. while it was
+      // offline): the command was sent last, so it is not adopted.
+      const count = published.length;
+      await device(FAN.hardwareId, 'state/reported', {
+        state: { speed: 15, light: false },
+        local: true,
+        at: sent.at - 60_000,
+      });
+      expect(published.length).toBe(count);
+      expect(await read()).toMatchObject({
+        desiredState: { speed: 80 },
+        stateVersion: before.stateVersion + 1,
+      });
+
+      // A local change made AFTER it wins and becomes the desired state, with its own time.
+      const localAt = Date.now();
+      await device(FAN.hardwareId, 'state/reported', {
+        state: { speed: 25, light: true },
+        local: true,
+        at: localAt,
+      });
+      expect(await read()).toMatchObject({
+        desiredState: { speed: 25, light: true },
+        stateVersion: before.stateVersion + 2,
+      });
+      expect(published.at(-1)).toMatchObject({
+        channel: 'state/desired',
+        message: { at: localAt, state: { speed: 25, light: true } },
+      });
+
+      // A device with a wrong clock (far in the future) can't beat every later command: its
+      // time is ignored and the change counts as "now".
+      await device(FAN.hardwareId, 'state/reported', {
+        state: { speed: 26, light: true },
+        local: true,
+        at: Date.now() + 10 * 24 * 3600 * 1000,
+      });
+      const last = published.at(-1)!.message as { at: number };
+      expect(last.at).toBeLessThanOrEqual(Date.now() + 1000);
     });
 
     it('validates and acks commands per device type', async () => {

@@ -224,6 +224,7 @@ export class DevicesService {
       claimedAt: null,
       desiredState: {},
       reportedState: {},
+      desiredAt: null,
       stateVersion: device.stateVersion + 1,
     });
     await this.mqtt.publish(device.hardwareId, 'state/desired', null, true);
@@ -262,13 +263,14 @@ export class DevicesService {
       await this.types.validateState(current.typeKey, desiredState);
       current.desiredState = desiredState;
       current.stateVersion += 1;
+      current.desiredAt = new Date();
       return manager.save(current);
     });
 
     await this.mqtt.publish(
       device.hardwareId,
       'state/desired',
-      { version: device.stateVersion, state: device.desiredState },
+      this.desiredMessage(device),
       true,
     );
     this.realtime.emit(device.orgId, 'device.desired', {
@@ -322,6 +324,7 @@ export class DevicesService {
       return;
     }
     const local = message?.local === true;
+    const localAt = this.sentAt(message?.at);
     let desiredChanged = false;
     let device: Device;
     try {
@@ -336,7 +339,14 @@ export class DevicesService {
         ) as DeviceState;
         await this.types.validateState(current.typeKey, reportedState);
         current.reportedState = reportedState;
-        if (local) {
+        // A local change that was made before the latest command from a user is stale:
+        // whoever sent last wins, so it is not adopted (the device gets the newer desired
+        // state instead). Without a time on either side, the local change is adopted.
+        const olderThanDesired =
+          localAt !== undefined &&
+          current.desiredAt !== null &&
+          localAt < current.desiredAt.getTime();
+        if (local && !olderThanDesired) {
           const desiredState = mergePatch(
             current.desiredState,
             state,
@@ -344,6 +354,7 @@ export class DevicesService {
           if (!isDeepStrictEqual(desiredState, current.desiredState)) {
             current.desiredState = desiredState;
             current.stateVersion += 1;
+            current.desiredAt = new Date(localAt ?? Date.now());
             desiredChanged = true;
           }
         }
@@ -359,7 +370,7 @@ export class DevicesService {
       await this.mqtt.publish(
         hardwareId,
         'state/desired',
-        { version: device.stateVersion, state: device.desiredState },
+        this.desiredMessage(device),
         true,
       );
       this.realtime.emit(device.orgId, 'device.desired', {
@@ -376,6 +387,28 @@ export class DevicesService {
       syncing: this.isSyncing(device),
       lastSeenAt: new Date(),
     });
+  }
+
+  /** What the device receives: the state, its version, and when it was sent (epoch ms). */
+  private desiredMessage(device: Device) {
+    return {
+      version: device.stateVersion,
+      at: (device.desiredAt ?? new Date()).getTime(),
+      state: device.desiredState,
+    };
+  }
+
+  /**
+   * A device's own time for a local change (epoch ms). Ignored when it is missing, not a
+   * plausible date, or in the future (a wrong clock must not beat every later command).
+   */
+  private sentAt(value: unknown): number | undefined {
+    return typeof value === 'number' &&
+      Number.isFinite(value) &&
+      value > 1.7e12 &&
+      value <= Date.now() + 60_000
+      ? Math.round(value)
+      : undefined;
   }
 
   /** `{"online": true, "firmware": "1.2.0"}` on connect; the broker sends `{"online": false}` (LWT). */

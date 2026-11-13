@@ -66,6 +66,10 @@ export class Device {
   @Column({ default: 0 })
   stateVersion: number;
 
+  /** When the desired state was sent (by a user, or by the device for a local change). */
+  @Column({ type: 'timestamptz', nullable: true })
+  desiredAt: Date | null;
+
   @Column({ type: 'varchar', nullable: true })
   firmwareVersion: string | null;
 
